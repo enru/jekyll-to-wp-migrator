@@ -1,32 +1,119 @@
 #!/usr/bin/env ruby
 
 require 'yaml'
+require 'mysql'
+ 
+module Jekyll
+    module WordPress
+        def self.read_posts dir
+            Dir.glob("#{dir}/*").each_with_object({}) do |f, h|
+                if File.file?(f)
+                    data = YAML.load_file(f)
+                    data_length = YAML.dump(data).length
 
-dir = ARGV[0]
+                    file = File.open(f)
+                    # add the length of the end of YAML separator
+                    # "---\n" = 4 chars
+                    file.seek(data_length+4)
+                    content = file.read
 
-def read_posts dir
-    Dir.glob("#{dir}/*").each_with_object({}) do |f, h|
-        if File.file?(f)
-            data = YAML.load_file(f)
-            data_length = YAML.dump(data).length
+                    filename = File.basename(f, File.extname(f))
+                    date = filename.split('-')[0..2]
+                    slugged_title = filename.split('-')[3..-1].join(' ')
 
-            file = File.open(f)
-            file.seek(data_length+4)
-            content = file.read
-            h[f] = {
-                :data => data,
-                :data_length => data_length,
-                :content => content 
-            }
-        elsif File.directory?(f)
-            h[f] = read_posts(f)
+                    data['date'] = date.join('-')
+                    data['title'] = slugged_title if data['title'].nil? 
+
+                    h[f] = {
+                        :data => data,
+                        :data_length => data_length,
+                        :content => content,
+                    }
+                elsif File.directory?(f)
+                    h[f] = read_posts(f)
+                end
+            end
         end
+
+        def self.insert_post( data, content ) 
+
+            px = $config['db']['table_prefix']
+            slug = self.sluggify(data['title'])
+            status = "draft"
+            status = "publish" if data['published'] 
+
+            posts_query = "
+                INSERT INTO #{px}posts (
+                    ID,
+                    post_type,
+                    post_status,
+                    post_date,
+                    post_title,
+                    post_name,
+                    post_content
+                ) VALUES (
+                    null,
+                    'post',
+                    '"+$dbh.quote(status)+"',
+                    '"+$dbh.quote(data['date'])+"',
+                    '"+$dbh.quote(data['title'])+"',
+                    '"+$dbh.quote(slug)+"',
+                    '"+$dbh.quote(content)+"'
+                )"
+
+            res = $dbh.query(posts_query)
+        end
+
+        def self.clean_entities( text )
+          if text.respond_to?(:force_encoding)
+            text.force_encoding("UTF-8")
+          end
+          text = HTMLEntities.new.encode(text, 'named')
+          # We don't want to convert these, it would break all
+          # HTML tags in the post and comments.
+          text.gsub!("&amp;", "&")
+          text.gsub!("&lt;", "<")
+          text.gsub!("&gt;", ">")
+          text.gsub!("&quot;", '"')
+          text.gsub!("&apos;", "'")
+          text
+        end
+
+        def self.sluggify( title )
+          begin
+            require 'unidecode'
+            title = title.to_ascii
+          rescue LoadError
+            STDERR.puts "Could not require 'unidecode'. If your post titles have non-ASCII characters, you could get nicer permalinks by installing unidecode."
+          end
+          title.downcase.gsub(/[^0-9A-Za-z]+/, " ").strip.gsub(" ", "-")
+        end
+
     end
 end
 
-read_posts(dir).each do |f,o|
-    p f
-    p o[:data_length]
-    p o[:data]
-    p o[:content]
+$config = {}
+if File.exists?('config.yml') 
+    $config = YAML.load_file('config.yml')
+else 
+    puts "no config.yml file"
+end
+
+if $config['db'].nil? && ARGV.length < 2 then
+    puts "Usage: "+__FILE__+" <postsdir>"
+    exit
+end
+
+dir = ARGV[0] 
+
+$dbh = Mysql.real_connect(
+    $config['db']['host'], 
+    $config['db']['user'], 
+    $config['db']['pass'], 
+    $config['db']['name'], 
+    $config['db']['port'], 
+    $config['db']['socket'])
+
+Jekyll::WordPress.read_posts(dir).each do |f,o|
+   Jekyll::WordPress.insert_post(o[:data], o[:content]) 
 end
