@@ -16,13 +16,16 @@ module Jekyll
                     # "---\n" = 4 chars
                     file.seek(data_length+4)
                     content = file.read
+                    if content.respond_to?(:force_encoding)
+                        content.force_encoding("UTF-8")
+                    end
 
                     filename = File.basename(f, File.extname(f))
                     date = filename.split('-')[0..2]
-                    slugged_title = filename.split('-')[3..-1].join(' ')
+                    slugged_title = filename.split('-')[3..-1]
 
                     data['date'] = date.join('-')
-                    data['title'] = slugged_title if data['title'].nil? 
+                    data['title'] = slugged_title.join(' ') if data['title'].nil? 
 
                     h[f] = {
                         :data => data,
@@ -64,29 +67,16 @@ module Jekyll
             res = $dbh.query(posts_query)
         end
 
-        def self.clean_entities( text )
-          if text.respond_to?(:force_encoding)
-            text.force_encoding("UTF-8")
-          end
-          text = HTMLEntities.new.encode(text, 'named')
-          # We don't want to convert these, it would break all
-          # HTML tags in the post and comments.
-          text.gsub!("&amp;", "&")
-          text.gsub!("&lt;", "<")
-          text.gsub!("&gt;", ">")
-          text.gsub!("&quot;", '"')
-          text.gsub!("&apos;", "'")
-          text
-        end
-
         def self.sluggify( title )
-          begin
-            require 'unidecode'
-            title = title.to_ascii
-          rescue LoadError
-            STDERR.puts "Could not require 'unidecode'. If your post titles have non-ASCII characters, you could get nicer permalinks by installing unidecode."
-          end
-          title.downcase.gsub(/[^0-9A-Za-z]+/, " ").strip.gsub(" ", "-")
+            begin
+                require 'unidecode'
+                title = title.to_ascii
+            rescue LoadError
+                STDERR.puts "Could not require 'unidecode'. "
+                    +" If your post titles have non-ASCII characters, "
+                    +" you could get nicer permalinks by installing unidecode."
+            end
+            title.downcase.gsub(/[^0-9A-Za-z]+/, " ").strip.gsub(" ", "-")
         end
 
     end
@@ -113,6 +103,8 @@ $dbh = Mysql.real_connect(
     $config['db']['name'], 
     $config['db']['port'], 
     $config['db']['socket'])
+
+$dbh.query("SET NAMES 'utf8'");
 
 Jekyll::WordPress.read_posts(dir).each do |f,o|
    Jekyll::WordPress.insert_post(o[:data], o[:content]) 
